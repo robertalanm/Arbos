@@ -1,5 +1,5 @@
 [project]
-name = "agent"
+name = "arbos"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -11,4 +11,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["agent"]
+py-modules = ["arbos"]

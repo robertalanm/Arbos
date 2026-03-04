@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Agent — one-command install
+# Arbos — one-command install
 #
 # Usage:
-#   ./install.sh
-#   curl -fsSL <url>/install.sh | bash   (interactive)
+#   ./run.sh
+#   curl -fsSL <url>/run.sh | bash   (interactive)
 #
 
 set -e
@@ -75,7 +75,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 fi
 
 if [ -z "$INSTALL_DIR" ] || [ ! -f "$INSTALL_DIR/pyproject.toml" ]; then
-    INSTALL_DIR="$HOME/Agent"
+    INSTALL_DIR="$HOME/Arbos"
 fi
 
 HAS_TTY=false
@@ -86,12 +86,11 @@ fi
 # ── Banner ───────────────────────────────────────────────────────────────────
 
 printf "\n${CYAN}${BOLD}"
-printf "      _                    _   \n"
-printf "     / \\   __ _  ___ _ __ | |_ \n"
-printf "    / _ \\ / _\` |/ _ \\ '_ \\| __|\n"
-printf "   / ___ \\ (_| |  __/ | | | |_ \n"
-printf "  /_/   \\_\\__, |\\___|_| |_|\\__|\n"
-printf "          |___/                \n"
+printf "      _         _               \n"
+printf "     / \\   _ __| |__   ___  ___ \n"
+printf "    / _ \\ | '__| '_ \\ / _ \\/ __|\n"
+printf "   / ___ \\| |  | |_) | (_) \\__ \\\\\n"
+printf "  /_/   \\_\\_|  |_.__/ \\___/|___/\n"
 printf "${NC}\n"
 
 # ── 1. Detect package manager ────────────────────────────────────────────────
@@ -116,7 +115,7 @@ pkg_install() {
 
 printf "  ${BOLD}Installing prerequisites${NC}\n\n"
 
-for cmd in git python3 curl vim; do
+for cmd in git python3 curl; do
     if command_exists "$cmd"; then
         ok "$cmd"
     else
@@ -200,126 +199,93 @@ mkdir -p history scratch
 
 printf "\n"
 
-# ── 6. Edit PROMPT.md ───────────────────────────────────────────────────────
+# ── 6. API keys ──────────────────────────────────────────────────────────────
 
-printf "  ${BOLD}Prompt${NC}\n\n"
+printf "  ${BOLD}API Keys${NC}\n\n"
 
-printf "  ${CYAN}PROMPT.md${NC} is the system prompt fed to the agent at every step.\n"
-printf "  It tells the agent who it is, where to find its goal, how to\n"
-printf "  store history, and any persistent hints you want to pass along.\n\n"
-printf "  ${DIM}You're about to open it in vim — edit it to your liking,${NC}\n"
-printf "  ${DIM}then save and quit (:wq) to continue the install.${NC}\n\n"
+touch "$INSTALL_DIR/.env"
 
-if [ "$HAS_TTY" = true ]; then
-    printf "  ${DIM}Press any key to open PROMPT.md in vim...${NC}"
-    read -rsn1 </dev/tty 2>/dev/null || true
-    printf "\n\n"
+ask_key() {
+    local key_name="$1" prompt_text="$2" help_text="$3" required="$4"
 
-    vim "$INSTALL_DIR/PROMPT.md" </dev/tty >/dev/tty
-
-    ok "PROMPT.md saved"
-else
-    [ -f "$INSTALL_DIR/PROMPT.md" ] || die "No TTY and no PROMPT.md — cannot configure"
-    ok "PROMPT.md exists (no TTY, skipping editor)"
-fi
-
-printf "\n"
-
-# ── 7. Cursor API key ────────────────────────────────────────────────────────
-
-printf "  ${BOLD}Authentication${NC}\n\n"
-
-# Check if CURSOR_API_KEY is already in .env
-_has_cursor_key=false
-if [ -f "$INSTALL_DIR/.env" ] && grep -q "^CURSOR_API_KEY=" "$INSTALL_DIR/.env" 2>/dev/null; then
-    _has_cursor_key=true
-fi
-
-if [ "$_has_cursor_key" = true ]; then
-    ok "CURSOR_API_KEY already set in .env"
-elif [ -n "${CURSOR_API_KEY:-}" ]; then
-    echo "CURSOR_API_KEY=$CURSOR_API_KEY" >> "$INSTALL_DIR/.env"
-    ok "CURSOR_API_KEY saved to .env"
-else
-    printf "  ${DIM}Get your API key from: https://cursor.com/settings/keys${NC}\n\n"
-
-    if [ "$HAS_TTY" = true ]; then
-        printf "  ${DIM}CURSOR_API_KEY:${NC} "
-        read -r CURSOR_API_KEY </dev/tty 2>/dev/null || CURSOR_API_KEY=""
-
-        if [ -z "$CURSOR_API_KEY" ]; then
-            die "CURSOR_API_KEY is required"
-        fi
-
-        echo "CURSOR_API_KEY=$CURSOR_API_KEY" >> "$INSTALL_DIR/.env"
-        ok "CURSOR_API_KEY saved to .env"
-    else
-        die "No TTY — set CURSOR_API_KEY in .env or environment and re-run"
+    if grep -q "^${key_name}=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        ok "$key_name already set"
+        return 0
     fi
-fi
 
-printf "\n"
+    if [ -n "${!key_name:-}" ]; then
+        echo "${key_name}=${!key_name}" >> "$INSTALL_DIR/.env"
+        ok "$key_name saved (from environment)"
+        return 0
+    fi
 
-# ── 8. Collect .env (optional extra vars) ────────────────────────────────────
-
-printf "  ${BOLD}Environment variables${NC}\n\n"
-
-printf "  ${DIM}Add any extra env vars your agent needs (API keys, etc.)${NC}\n"
-printf "  ${DIM}These will be available to the agent at runtime via .env${NC}\n\n"
-
-if [ "$HAS_TTY" = true ]; then
-    printf "  ${DIM}Paste KEY=VALUE lines, one per line.${NC}\n"
-    printf "  ${DIM}Press Enter on an empty line when done (or just Enter to skip).${NC}\n\n"
-
-    ENV_CONTENT=""
-    while true; do
-        printf "  ${CYAN}>${NC} "
-        IFS= read -r line </dev/tty 2>/dev/null || break
-        [ -z "$line" ] && break
-        ENV_CONTENT+="$line"$'\n'
-    done
-
-    if [ -n "$ENV_CONTENT" ]; then
-        printf '%s' "$ENV_CONTENT" >> "$INSTALL_DIR/.env"
-        ok ".env saved"
-    else
-        if [ -f "$INSTALL_DIR/.env" ]; then
-            ok ".env unchanged (kept existing)"
+    if [ "$HAS_TTY" != true ]; then
+        if [ "$required" = "required" ]; then
+            die "No TTY — set $key_name in .env or environment and re-run"
         else
-            ok "No extra env vars (skipped)"
+            return 0
         fi
     fi
-else
-    if [ -f "$INSTALL_DIR/.env" ]; then
-        ok ".env exists"
-    else
-        ok "No .env file (skipped)"
+
+    [ -n "$help_text" ] && printf "  ${DIM}%s${NC}\n\n" "$help_text"
+    printf "  ${CYAN}%s:${NC} " "$prompt_text"
+    read -r _val </dev/tty 2>/dev/null || _val=""
+
+    if [ -z "$_val" ]; then
+        if [ "$required" = "required" ]; then
+            die "$key_name is required"
+        else
+            ok "$key_name skipped"
+            return 0
+        fi
     fi
-fi
+
+    echo "${key_name}=${_val}" >> "$INSTALL_DIR/.env"
+    ok "$key_name saved"
+}
+
+ask_key "CURSOR_API_KEY" \
+    "Cursor API key" \
+    "Get yours at: https://cursor.com/settings/keys" \
+    "required"
 
 printf "\n"
 
-# ── 9. Start agent ───────────────────────────────────────────────────────────
+ask_key "HL_SECRET_KEY" \
+    "Hyperliquid secret key" \
+    "Export your wallet private key from MetaMask: Settings → Security → Reveal private key" \
+    "required"
 
-printf "  ${BOLD}Starting agent${NC}\n\n"
+printf "\n"
+
+ask_key "COINGLASS_API_KEY" \
+    "Coinglass API key" \
+    "Get yours at: https://www.coinglass.com/pricing (professional plan required)" \
+    "required"
+
+printf "\n"
+
+# ── 7. Start Arbos ───────────────────────────────────────────────────────────
+
+printf "  ${BOLD}Starting Arbos${NC}\n\n"
 
 if ! command_exists agent; then
     die "'agent' command not found in PATH — Cursor CLI is required"
 fi
 ok "agent CLI found at $(which agent)"
 
-LAUNCH_SCRIPT="$INSTALL_DIR/.agent-launch.sh"
+LAUNCH_SCRIPT="$INSTALL_DIR/.arbos-launch.sh"
 cat > "$LAUNCH_SCRIPT" <<LAUNCH
 #!/usr/bin/env bash
 export PATH="\$HOME/.cursor/bin:\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH"
 cd "$INSTALL_DIR"
 set -a; [ -f .env ] && source .env; set +a
 source .venv/bin/activate
-exec python3 agent.py 2>&1
+exec python3 arbos.py 2>&1
 LAUNCH
 chmod +x "$LAUNCH_SCRIPT"
 
-PM2_NAME="agent"
+PM2_NAME="arbos"
 
 # Install pm2 if needed
 if ! command_exists pm2; then
@@ -342,7 +308,7 @@ pm2 delete "$PM2_NAME" 2>/dev/null || true
 pm2 start "$LAUNCH_SCRIPT" \
     --name "$PM2_NAME" \
     --cwd "$INSTALL_DIR" \
-    --log "$INSTALL_DIR/logs/agent.log" \
+    --log "$INSTALL_DIR/logs/arbos.log" \
     --time \
     --restart-delay 10000
 
@@ -350,15 +316,15 @@ pm2 save 2>/dev/null || true
 
 sleep 2
 if pm2 pid "$PM2_NAME" >/dev/null 2>&1 && [ -n "$(pm2 pid "$PM2_NAME")" ]; then
-    ok "Agent running"
+    ok "Arbos running"
 else
-    err "Agent may not have started — check logs:"
+    err "Arbos may not have started — check logs:"
     printf "    ${DIM}pm2 logs $PM2_NAME${NC}\n"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────
 printf "\n"
-printf "  ${GREEN}${BOLD}Agent is live${NC}\n"
+printf "  ${GREEN}${BOLD}Arbos is live${NC}\n"
 printf "\n"
 printf "  ${DIM}logs${NC}     pm2 logs $PM2_NAME\n"
 printf "  ${DIM}status${NC}   pm2 status\n"

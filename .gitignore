@@ -13,5 +13,5 @@ history/*
 scratch/*
 logs/*
 .env
-.agent-launch.sh
-.agent.pid
+.arbos-launch.sh
+.arbos.pid

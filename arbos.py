@@ -59,12 +59,11 @@ def info(msg: str):
 
 def banner():
     print(f"\n{CYAN}{BOLD}", end="")
-    print("      _                    _   ")
-    print("     / \\   __ _  ___ _ __ | |_ ")
-    print("    / _ \\ / _` |/ _ \\ '_ \\| __|")
-    print("   / ___ \\ (_| |  __/ | | | |_ ")
-    print("  /_/   \\_\\__, |\\___|_| |_|\\__|")
-    print("          |___/                ")
+    print("      _         _               ")
+    print("     / \\   _ __| |__   ___  ___ ")
+    print("    / _ \\ | '__| '_ \\ / _ \\/ __|")
+    print("   / ___ \\| |  | |_) | (_) \\__ \\")
+    print("  /_/   \\_\\_|  |_.__/ \\___/|___/")
     print(f"{NC}")
 
 
@@ -270,7 +269,7 @@ def run_step(prompt: str) -> bool:
 
 def main() -> None:
     banner()
-    header("Agent loop")
+    header("Arbos loop")
 
     dim(f"prompt   {PROMPT_FILE}")
     dim(f"workdir  {WORKING_DIR}")
