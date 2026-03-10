@@ -309,6 +309,7 @@ def _claude_env() -> dict[str, str]:
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
     env.setdefault("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
+    env["IS_SANDBOX"] = "1"
     return env
 
 
