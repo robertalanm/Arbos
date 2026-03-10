@@ -283,7 +283,6 @@ def _send_step_update(step_number: int, run_dir: Path, success: bool):
 # ── Agent runner ─────────────────────────────────────────────────────────────
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "anthropic/claude-opus-4.6")
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "anthropic/claude-3.5-haiku")
 IS_ROOT = os.getuid() == 0
 
 
@@ -675,7 +674,7 @@ def _build_operator_prompt(user_text: str) -> str:
 
 def run_agent_streaming(bot, prompt: str, chat_id: int) -> str:
     """Run Claude Code CLI and stream output into a Telegram message."""
-    cmd = _claude_cmd(prompt, extra_flags=["--model", CHAT_MODEL])
+    cmd = _claude_cmd(prompt)
 
     msg = bot.send_message(chat_id, "Running...")
     current_text = ""
