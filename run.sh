@@ -200,11 +200,39 @@ mkdir -p context/runs context/chat
 
 printf "\n"
 
-# ── 6. API keys ──────────────────────────────────────────────────────────────
+# ── 6. Choose provider ───────────────────────────────────────────────────────
 
-printf "  ${BOLD}API Keys${NC}\n\n"
+printf "  ${BOLD}LLM Provider${NC}\n\n"
 
 touch "$INSTALL_DIR/.env"
+
+PROVIDER=""
+if grep -q "^PROVIDER=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    PROVIDER=$(grep "^PROVIDER=" "$INSTALL_DIR/.env" | head -1 | cut -d= -f2 | tr -d "' \"")
+    ok "Provider already set: $PROVIDER"
+elif [ "$HAS_TTY" = true ]; then
+    printf "  ${DIM}Pick your inference backend:${NC}\n\n"
+    printf "    ${BOLD}1)${NC} Chutes     ${DIM}— cheap multi-model pool via chutes.ai${NC}\n"
+    printf "    ${BOLD}2)${NC} OpenRouter  ${DIM}— Claude Opus 4.6 via openrouter.ai${NC}\n\n"
+    printf "  ${CYAN}Choice [1]:${NC} "
+    read -r _choice </dev/tty 2>/dev/null || _choice=""
+    case "$_choice" in
+        2) PROVIDER="openrouter" ;;
+        *) PROVIDER="chutes" ;;
+    esac
+    echo "PROVIDER=$PROVIDER" >> "$INSTALL_DIR/.env"
+    ok "Provider set to $PROVIDER"
+else
+    PROVIDER="chutes"
+    echo "PROVIDER=$PROVIDER" >> "$INSTALL_DIR/.env"
+    ok "Provider defaulted to chutes (no TTY)"
+fi
+
+printf "\n"
+
+# ── 7. API keys ──────────────────────────────────────────────────────────────
+
+printf "  ${BOLD}API Keys${NC}\n\n"
 
 ask_key() {
     local key_name="$1" prompt_text="$2" help_text="$3" required="$4"
@@ -245,10 +273,17 @@ ask_key() {
     ok "$key_name saved"
 }
 
-ask_key "CHUTES_API_KEY" \
-    "Chutes API key" \
-    "Get yours at: https://chutes.ai — sign up and generate an API key" \
-    "required"
+if [ "$PROVIDER" = "openrouter" ]; then
+    ask_key "OPENROUTER_API_KEY" \
+        "OpenRouter API key" \
+        "Get yours at: https://openrouter.ai/keys" \
+        "required"
+else
+    ask_key "CHUTES_API_KEY" \
+        "Chutes API key" \
+        "Get yours at: https://chutes.ai — sign up and generate an API key" \
+        "required"
+fi
 
 printf "\n"
 
@@ -259,7 +294,7 @@ ask_key "TAU_BOT_TOKEN" \
 
 printf "\n"
 
-# ── 7. Start Arbos ───────────────────────────────────────────────────────────
+# ── 8. Start Arbos ───────────────────────────────────────────────────────────
 
 printf "  ${BOLD}Starting Arbos${NC}\n\n"
 

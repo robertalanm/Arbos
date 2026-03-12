@@ -218,20 +218,32 @@ def _redact_secrets(text: str) -> str:
         text = pattern.sub("[REDACTED]", text)
     return text
 MAX_CONCURRENT = int(os.environ.get("CLAUDE_MAX_CONCURRENT", "4"))
-
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "moonshotai/Kimi-K2.5-TEE")
-CHUTES_POOL = os.environ.get(
-    "CHUTES_POOL",
-    "moonshotai/Kimi-K2.5-TEE,zai-org/GLM-5-TEE,MiniMaxAI/MiniMax-M2.5-TEE,zai-org/GLM-4.7-TEE",
-)
-CHUTES_ROUTING_AGENT = os.environ.get("CHUTES_ROUTING_AGENT", f"{CHUTES_POOL}:throughput")
-CHUTES_ROUTING_BOT = os.environ.get("CHUTES_ROUTING_BOT", f"{CHUTES_POOL}:latency")
+PROVIDER = os.environ.get("PROVIDER", "chutes")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8089"))
-CHUTES_API_KEY = os.environ.get("CHUTES_API_KEY", "")
-CHUTES_BASE_URL = os.environ.get("CHUTES_BASE_URL", "https://llm.chutes.ai/v1")
 PROXY_TIMEOUT = int(os.environ.get("PROXY_TIMEOUT", "600"))
-COST_PER_M_INPUT = float(os.environ.get("COST_PER_M_INPUT", "0.14"))
-COST_PER_M_OUTPUT = float(os.environ.get("COST_PER_M_OUTPUT", "0.60"))
+CHUTES_API_KEY = os.environ.get("CHUTES_API_KEY", "")
+
+if PROVIDER == "openrouter":
+    CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "anthropic/claude-opus-4.6")
+    LLM_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+    LLM_BASE_URL = "https://openrouter.ai/api/v1"
+    COST_PER_M_INPUT = float(os.environ.get("COST_PER_M_INPUT", "5.00"))
+    COST_PER_M_OUTPUT = float(os.environ.get("COST_PER_M_OUTPUT", "25.00"))
+    CHUTES_ROUTING_AGENT = CLAUDE_MODEL
+    CHUTES_ROUTING_BOT = CLAUDE_MODEL
+else:
+    CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "moonshotai/Kimi-K2.5-TEE")
+    CHUTES_BASE_URL = os.environ.get("CHUTES_BASE_URL", "https://llm.chutes.ai/v1")
+    LLM_API_KEY = CHUTES_API_KEY
+    LLM_BASE_URL = CHUTES_BASE_URL
+    CHUTES_POOL = os.environ.get(
+        "CHUTES_POOL",
+        "moonshotai/Kimi-K2.5-TEE,zai-org/GLM-5-TEE,MiniMaxAI/MiniMax-M2.5-TEE,zai-org/GLM-4.7-TEE",
+    )
+    CHUTES_ROUTING_AGENT = os.environ.get("CHUTES_ROUTING_AGENT", f"{CHUTES_POOL}:throughput")
+    CHUTES_ROUTING_BOT = os.environ.get("CHUTES_ROUTING_BOT", f"{CHUTES_POOL}:latency")
+    COST_PER_M_INPUT = float(os.environ.get("COST_PER_M_INPUT", "0.14"))
+    COST_PER_M_OUTPUT = float(os.environ.get("COST_PER_M_OUTPUT", "0.60"))
 IS_ROOT = os.getuid() == 0
 MAX_RETRIES = int(os.environ.get("CLAUDE_MAX_RETRIES", "5"))
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "600"))
@@ -774,7 +786,7 @@ async def _stream_openai_to_anthropic(oai_response: httpx.Response, model: str):
 
 def _chutes_headers() -> dict:
     return {
-        "Authorization": f"Bearer {CHUTES_API_KEY}",
+        "Authorization": f"Bearer {LLM_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -994,10 +1006,27 @@ def _claude_cmd(prompt: str, extra_flags: list[str] | None = None) -> list[str]:
 
 
 def _write_claude_settings():
-    """Point Claude Code at the in-process Chutes proxy."""
+    """Point Claude Code at the active provider (OpenRouter direct or Chutes proxy)."""
     settings_dir = WORKING_DIR / ".claude"
     settings_dir.mkdir(exist_ok=True)
-    proxy_url = f"http://127.0.0.1:{PROXY_PORT}"
+
+    if PROVIDER == "openrouter":
+        env_block = {
+            "ANTHROPIC_API_KEY": LLM_API_KEY,
+            "ANTHROPIC_BASE_URL": LLM_BASE_URL,
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+        target_label = LLM_BASE_URL
+    else:
+        proxy_url = f"http://127.0.0.1:{PROXY_PORT}"
+        env_block = {
+            "ANTHROPIC_API_KEY": "chutes-proxy",
+            "ANTHROPIC_BASE_URL": proxy_url,
+            "ANTHROPIC_AUTH_TOKEN": "",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
+        target_label = proxy_url
+
     settings = {
         "model": CLAUDE_MODEL,
         "permissions": {
@@ -1007,23 +1036,22 @@ def _write_claude_settings():
                 "TodoWrite(*)", "NotebookEdit(*)", "Task(*)",
             ],
         },
-        "env": {
-            "ANTHROPIC_API_KEY": "chutes-proxy",
-            "ANTHROPIC_BASE_URL": proxy_url,
-            "ANTHROPIC_AUTH_TOKEN": "",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        },
+        "env": env_block,
     }
     (settings_dir / "settings.local.json").write_text(json.dumps(settings, indent=2))
-    _log(f"wrote .claude/settings.local.json (model={CLAUDE_MODEL}, proxy={proxy_url})")
+    _log(f"wrote .claude/settings.local.json (provider={PROVIDER}, model={CLAUDE_MODEL}, target={target_label})")
 
 
 def _claude_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("TAU_BOT_TOKEN", None)
-    env["ANTHROPIC_API_KEY"] = "chutes-proxy"
-    env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
-    env["ANTHROPIC_AUTH_TOKEN"] = ""
+    if PROVIDER == "openrouter":
+        env["ANTHROPIC_API_KEY"] = LLM_API_KEY
+        env["ANTHROPIC_BASE_URL"] = LLM_BASE_URL
+    else:
+        env["ANTHROPIC_API_KEY"] = "chutes-proxy"
+        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{PROXY_PORT}"
+        env["ANTHROPIC_AUTH_TOKEN"] = ""
     return env
 
 
@@ -1481,7 +1509,10 @@ def _format_tool_activity(tool_name: str, tool_input: dict) -> str:
 
 def run_agent_streaming(bot, prompt: str, chat_id: int) -> str:
     """Run Claude Code CLI and stream output into a Telegram message."""
-    cmd = _claude_cmd(prompt, extra_flags=["--model", "bot"])
+    if PROVIDER == "openrouter":
+        cmd = _claude_cmd(prompt)
+    else:
+        cmd = _claude_cmd(prompt, extra_flags=["--model", "bot"])
 
     msg = bot.send_message(chat_id, "thinking...")
     current_text = ""
@@ -1923,13 +1954,14 @@ def main() -> None:
         print(f"On future starts: TAU_BOT_TOKEN='{bot_token}' python arbos.py")
         return
 
-    _log(f"arbos starting in {WORKING_DIR}")
+    _log(f"arbos starting in {WORKING_DIR} (provider={PROVIDER}, model={CLAUDE_MODEL})")
     _kill_stale_claude_procs()
     _reload_env_secrets()
     CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not CHUTES_API_KEY:
-        _log("WARNING: CHUTES_API_KEY not set — proxy will fail")
+    if not LLM_API_KEY:
+        key_name = "OPENROUTER_API_KEY" if PROVIDER == "openrouter" else "CHUTES_API_KEY"
+        _log(f"WARNING: {key_name} not set — LLM calls will fail")
 
     def _handle_sigterm(signum, frame):
         _log("SIGTERM received; shutting down gracefully")
@@ -1937,9 +1969,12 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
-    _log(f"starting chutes proxy thread (port={PROXY_PORT}, agent={CHUTES_ROUTING_AGENT}, bot={CHUTES_ROUTING_BOT})")
-    threading.Thread(target=_start_proxy, daemon=True).start()
-    time.sleep(1)
+    if PROVIDER != "openrouter":
+        _log(f"starting chutes proxy thread (port={PROXY_PORT}, agent={CHUTES_ROUTING_AGENT}, bot={CHUTES_ROUTING_BOT})")
+        threading.Thread(target=_start_proxy, daemon=True).start()
+        time.sleep(1)
+    else:
+        _log(f"openrouter direct mode — no proxy needed (target={LLM_BASE_URL})")
 
     _write_claude_settings()
 
