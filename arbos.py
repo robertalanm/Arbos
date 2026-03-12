@@ -241,6 +241,8 @@ _agent_wake = threading.Event()
 _shutdown = threading.Event()
 _claude_semaphore = threading.Semaphore(MAX_CONCURRENT)
 _step_count = 0
+_child_procs: set[subprocess.Popen] = set()
+_child_procs_lock = threading.Lock()
 
 
 def _file_log(msg: str):
@@ -784,6 +786,39 @@ async def _proxy_root():
     }
 
 
+_CONTEXT_LENGTH_RE = re.compile(
+    r"maximum context length is (\d+) tokens.*?(\d+) output tokens.*?(\d+) input tokens",
+    re.DOTALL,
+)
+PROXY_MAX_RETRIES = 3
+
+
+def _parse_context_length_error(error_msg: str) -> tuple[int, int, int] | None:
+    """Extract (context_limit, requested_output, input_tokens) from a context-length 400."""
+    m = _CONTEXT_LENGTH_RE.search(error_msg)
+    if m:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return None
+
+
+def _maybe_reduce_max_tokens(oai_request: dict, error_msg: str) -> bool:
+    """If the error is a context-length overflow, reduce max_tokens to fit. Returns True if adjusted."""
+    parsed = _parse_context_length_error(error_msg)
+    if not parsed:
+        return False
+    ctx_limit, _req_output, input_tokens = parsed
+    headroom = ctx_limit - input_tokens
+    if headroom < 1024:
+        return False
+    new_max = max(1024, headroom - 64)
+    old_max = oai_request.get("max_tokens", 0)
+    if new_max >= old_max:
+        return False
+    oai_request["max_tokens"] = new_max
+    _log(f"proxy: reduced max_tokens {old_max} -> {new_max} (ctx_limit={ctx_limit}, input={input_tokens})")
+    return True
+
+
 @_proxy_app.post("/v1/messages")
 async def _proxy_messages(request: Request):
     body = await request.json()
@@ -794,92 +829,124 @@ async def _proxy_messages(request: Request):
     routing_label = CHUTES_ROUTING_BOT if routing == "bot" else CHUTES_ROUTING_AGENT
 
     if stream:
-        try:
-            client = httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT))
-            resp = await client.send(
-                client.build_request(
-                    "POST", f"{CHUTES_BASE_URL}/chat/completions",
-                    json=oai_request, headers=_chutes_headers(),
-                ),
-                stream=True,
-            )
-            if resp.status_code != 200:
-                error_body = await resp.aread()
-                await resp.aclose()
-                await client.aclose()
-                error_msg = error_body.decode()[:300]
-                _log(f"proxy: chutes returned {resp.status_code}: {error_msg}")
+        last_error_msg = ""
+        for attempt in range(1, PROXY_MAX_RETRIES + 1):
+            try:
+                client = httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT))
+                resp = await client.send(
+                    client.build_request(
+                        "POST", f"{CHUTES_BASE_URL}/chat/completions",
+                        json=oai_request, headers=_chutes_headers(),
+                    ),
+                    stream=True,
+                )
+                if resp.status_code != 200:
+                    error_body = await resp.aread()
+                    await resp.aclose()
+                    await client.aclose()
+                    last_error_msg = error_body.decode()[:500]
+                    _log(f"proxy: chutes returned {resp.status_code} (attempt {attempt}/{PROXY_MAX_RETRIES}): {last_error_msg[:300]}")
+
+                    if resp.status_code == 400 and _maybe_reduce_max_tokens(oai_request, last_error_msg):
+                        continue
+                    if attempt < PROXY_MAX_RETRIES:
+                        continue
+
+                    return JSONResponse(status_code=502, content={
+                        "type": "error", "error": {
+                            "type": "api_error",
+                            "message": f"Chutes routing failed ({resp.status_code}): {last_error_msg[:300]}",
+                        },
+                    })
+
+                async def generate(resp=resp, cl=client):
+                    try:
+                        _log(f"proxy: streaming [{routing}] via {routing_label}")
+                        async for event in _stream_openai_to_anthropic(resp, model):
+                            yield event
+                    finally:
+                        await resp.aclose()
+                        await cl.aclose()
+
+                return StreamingResponse(
+                    generate(), media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+            except httpx.TimeoutException:
+                last_error_msg = f"timed out after {PROXY_TIMEOUT}s"
+                _log(f"proxy: {last_error_msg} (attempt {attempt}/{PROXY_MAX_RETRIES})")
+                if attempt < PROXY_MAX_RETRIES:
+                    continue
                 return JSONResponse(status_code=502, content={
                     "type": "error", "error": {
                         "type": "api_error",
-                        "message": f"Chutes routing failed ({resp.status_code}): {error_msg}",
+                        "message": f"Chutes routing {last_error_msg}",
                     },
                 })
-
-            async def generate(resp=resp, cl=client):
-                try:
-                    _log(f"proxy: streaming [{routing}] via {routing_label}")
-                    async for event in _stream_openai_to_anthropic(resp, model):
-                        yield event
-                finally:
-                    await resp.aclose()
-                    await cl.aclose()
-
-            return StreamingResponse(
-                generate(), media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-            )
-        except httpx.TimeoutException:
-            return JSONResponse(status_code=502, content={
-                "type": "error", "error": {
-                    "type": "api_error",
-                    "message": f"Chutes routing timed out after {PROXY_TIMEOUT}s",
-                },
-            })
-        except Exception as exc:
-            return JSONResponse(status_code=502, content={
-                "type": "error", "error": {
-                    "type": "api_error",
-                    "message": f"Chutes routing error: {str(exc)[:300]}",
-                },
-            })
+            except Exception as exc:
+                last_error_msg = str(exc)[:300]
+                _log(f"proxy: error (attempt {attempt}/{PROXY_MAX_RETRIES}): {last_error_msg}")
+                if attempt < PROXY_MAX_RETRIES:
+                    continue
+                return JSONResponse(status_code=502, content={
+                    "type": "error", "error": {
+                        "type": "api_error",
+                        "message": f"Chutes routing error: {last_error_msg}",
+                    },
+                })
 
     else:
         oai_request.pop("stream", None)
         oai_request.pop("stream_options", None)
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT)) as client:
-                resp = await client.post(
-                    f"{CHUTES_BASE_URL}/chat/completions",
-                    json=oai_request, headers=_chutes_headers(),
-                )
-            if resp.status_code != 200:
-                error_msg = resp.text[:300]
-                _log(f"proxy: chutes returned {resp.status_code}: {error_msg}")
+        last_error_msg = ""
+        for attempt in range(1, PROXY_MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT)) as client:
+                    resp = await client.post(
+                        f"{CHUTES_BASE_URL}/chat/completions",
+                        json=oai_request, headers=_chutes_headers(),
+                    )
+                if resp.status_code != 200:
+                    last_error_msg = resp.text[:500]
+                    _log(f"proxy: chutes returned {resp.status_code} (attempt {attempt}/{PROXY_MAX_RETRIES}): {last_error_msg[:300]}")
+
+                    if resp.status_code == 400 and _maybe_reduce_max_tokens(oai_request, last_error_msg):
+                        continue
+                    if attempt < PROXY_MAX_RETRIES:
+                        continue
+
+                    return JSONResponse(status_code=502, content={
+                        "type": "error", "error": {
+                            "type": "api_error",
+                            "message": f"Chutes routing failed ({resp.status_code}): {last_error_msg[:300]}",
+                        },
+                    })
+                oai_data = resp.json()
+                actual_model = oai_data.get("model", "?")
+                _log(f"proxy: response [{routing}] via {routing_label} model={actual_model}")
+                return JSONResponse(content=_openai_response_to_anthropic(oai_data, model))
+            except httpx.TimeoutException:
+                last_error_msg = f"timed out after {PROXY_TIMEOUT}s"
+                _log(f"proxy: {last_error_msg} (attempt {attempt}/{PROXY_MAX_RETRIES})")
+                if attempt < PROXY_MAX_RETRIES:
+                    continue
                 return JSONResponse(status_code=502, content={
                     "type": "error", "error": {
                         "type": "api_error",
-                        "message": f"Chutes routing failed ({resp.status_code}): {error_msg}",
+                        "message": f"Chutes routing {last_error_msg}",
                     },
                 })
-            oai_data = resp.json()
-            actual_model = oai_data.get("model", "?")
-            _log(f"proxy: response [{routing}] via {routing_label} model={actual_model}")
-            return JSONResponse(content=_openai_response_to_anthropic(oai_data, model))
-        except httpx.TimeoutException:
-            return JSONResponse(status_code=502, content={
-                "type": "error", "error": {
-                    "type": "api_error",
-                    "message": f"Chutes routing timed out after {PROXY_TIMEOUT}s",
-                },
-            })
-        except Exception as exc:
-            return JSONResponse(status_code=502, content={
-                "type": "error", "error": {
-                    "type": "api_error",
-                    "message": f"Chutes routing error: {str(exc)[:300]}",
-                },
-            })
+            except Exception as exc:
+                last_error_msg = str(exc)[:300]
+                _log(f"proxy: error (attempt {attempt}/{PROXY_MAX_RETRIES}): {last_error_msg}")
+                if attempt < PROXY_MAX_RETRIES:
+                    continue
+                return JSONResponse(status_code=502, content={
+                    "type": "error", "error": {
+                        "type": "api_error",
+                        "message": f"Chutes routing error: {last_error_msg}",
+                    },
+                })
 
 
 @_proxy_app.post("/v1/messages/count_tokens")
@@ -959,6 +1026,8 @@ def _run_claude_once(cmd, env, on_text=None, on_activity=None):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1,
     )
+    with _child_procs_lock:
+        _child_procs.add(proc)
 
     result_text = ""
     complete_texts: list[str] = []
@@ -1032,6 +1101,8 @@ def _run_claude_once(cmd, env, on_text=None, on_activity=None):
         stderr_output = proc.stderr.read() if proc.stderr else ""
 
     returncode = proc.wait()
+    with _child_procs_lock:
+        _child_procs.discard(proc)
     return returncode, result_text, raw_lines, stderr_output
 
 
@@ -1621,6 +1692,44 @@ def run_bot():
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+def _kill_child_procs():
+    """Kill all tracked claude child processes."""
+    with _child_procs_lock:
+        procs = list(_child_procs)
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                _log(f"killing child claude pid={proc.pid}")
+                proc.kill()
+                proc.wait(timeout=5)
+        except Exception:
+            pass
+    with _child_procs_lock:
+        _child_procs.clear()
+
+
+def _kill_stale_claude_procs():
+    """Kill any leftover claude processes from a previous arbos instance."""
+    my_pid = os.getpid()
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "claude"], capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            pid = int(line.strip())
+            if pid == my_pid:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                _log(f"killed stale claude orphan pid={pid}")
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+    except Exception:
+        pass
+
+
 def _send_cli(args: list[str]):
     """CLI entry point: python arbos.py send 'message' [--file path]"""
     import argparse
@@ -1668,6 +1777,7 @@ def main() -> None:
         return
 
     _log(f"arbos starting in {WORKING_DIR}")
+    _kill_stale_claude_procs()
     _reload_env_secrets()
     CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1692,11 +1802,14 @@ def main() -> None:
     while not _shutdown.is_set():
         if RESTART_FLAG.exists():
             RESTART_FLAG.unlink()
-            _log("restart requested; exiting for pm2")
+            _log("restart requested; killing children and exiting for pm2")
+            _kill_child_procs()
             sys.exit(0)
         _process_pending_env()
         _shutdown.wait(timeout=1)
 
+    _log("shutdown: killing children")
+    _kill_child_procs()
     _log("shutdown complete")
     sys.exit(0)
 
