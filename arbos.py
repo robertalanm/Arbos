@@ -1211,11 +1211,23 @@ def run_step(prompt: str, step_number: int, goal_step: int = 0) -> bool:
 
     _reset_tokens()
 
+    _last_activity = [""]
+    _heartbeat_stop = threading.Event()
+
     def _on_activity(status: str):
+        _last_activity[0] = status
         elapsed_s = time.monotonic() - t0
         inp, out = _get_tokens()
         tok = f" | {fmt_tokens(inp, out, elapsed_s)}" if (inp or out) else ""
         _edit_step_msg(f"{step_label} ({fmt_duration(elapsed_s)}{tok})\n{status}")
+
+    def _heartbeat():
+        while not _heartbeat_stop.wait(timeout=10):
+            elapsed_s = time.monotonic() - t0
+            inp, out = _get_tokens()
+            tok = f" | {fmt_tokens(inp, out, elapsed_s)}" if (inp or out) else ""
+            status = _last_activity[0] or "working..."
+            _edit_step_msg(f"{step_label} ({fmt_duration(elapsed_s)}{tok})\n{status}", force=True)
 
     success = False
     try:
@@ -1225,6 +1237,8 @@ def run_step(prompt: str, step_number: int, goal_step: int = 0) -> bool:
         _log(f"prompt preview: {preview}")
 
         _log(f"step {step_number}: executing")
+
+        threading.Thread(target=_heartbeat, daemon=True).start()
 
         result = run_agent(
             _claude_cmd(prompt),
@@ -1242,6 +1256,7 @@ def run_step(prompt: str, step_number: int, goal_step: int = 0) -> bool:
         _log(f"step {'succeeded' if success else 'failed'} in {fmt_duration(elapsed)}")
         return success
     finally:
+        _heartbeat_stop.set()
         with _log_lock:
             if _log_fh:
                 _log_fh.close()
