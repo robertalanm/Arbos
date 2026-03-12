@@ -32,35 +32,32 @@ curl -fsSL https://raw.githubusercontent.com/unconst/Arbos/main/run.sh | bash
 ## Usage
 
 Arbos just loops a `GOAL.md` through a coding agent. 
-So just tell the agent what you want `GOAL.md` to be, i.e:
+To run Arbos just set the `/goal` like this:
 ```
-R = you = an autonomous research agent with capital, data, and compute
+/goal
 
-Goal: design and evolve a system S that discovers profitable strategies in changing environments.
+Use the below program to evolve a system S that discovers profitable trading strategies.
 
-Initial State:
-C = { $10k Hyperliquid capital, Coinglass derivatives data (funding, OI, liquidations, leverage), compute on Basilica/Targon/Lium }
-S₀ = continuous adaptive trading system with:
-    M ≈ 50 models per asset
-    online training on fresh data
-    evolutionary model search (mutate/replace weak models)
-    strict walk-forward validation + online Sharpe filtering
-    horizon ensembles H = {1h,4h,8h,12h,24h}
-    consensus gating for signals
-    layered risk controls (position limits, vol sizing, stops, drawdown protection)
-    features from derivatives positioning signals + price
-    exploration of modern time-series foundation models
+You are given:
+C = { Hyperliquid capital, Coinglass derivatives data (funding, OI, liquidations, leverage), compute on Basilica/Targon/Lium }
 
-Your loop consists of the following:
+Initial state (build first)
+S₀ = online continuous adaptive trading system which:
+    - uses online data for training
+    - uses evolutionary model search (mutate/replace weak models)
+    - uses strict walk-forward validation + online Sharpe filtering
+    - uses horizon ensembles H = {1h,4h,8h,12h,24h}
+    - uses consensus gating for signals
+    - uses time-series foundation models
+
+Run this loop continously
 loop t = 1..∞
-    S_t = design_or_modify(S_{t-1})
-    O_t = run(S_t)         # train models, evaluate, ensemble, trade
-    P_t = measure(O_t)     # Sharpe, PnL, drawdown, regime behavior
-    Δ_t = reflect(P_t)     # find weaknesses in models, signals, validation, risk
-    S_{t+1} = improve(S_t, Δ_t)
+    S_t = design_or_modify(S_{t-1})  # implement current design S
+    O_t = run(S_t)                   # run S: i.e. train, evaluate, trade
+    P_t = measure(O_t)               # eval: Sharpe, PnL, drawdown, regime behavior
+    Δ_t = reflect(S_t, P_t)          # find weaknesses in your design 
+    S_{t+1} = improve(S_t, Δ_t)      # design a new design.
 end
-
-Dont stop. Be proactive.
 ```
 
 Then iterate.
