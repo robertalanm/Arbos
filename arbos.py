@@ -283,10 +283,13 @@ def _get_tokens() -> tuple[int, int]:
         return _token_usage["input"], _token_usage["output"]
 
 
-def fmt_tokens(inp: int, out: int) -> str:
+def fmt_tokens(inp: int, out: int, elapsed: float = 0) -> str:
     def _k(n: int) -> str:
         return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
-    return f"{_k(inp)} in / {_k(out)} out"
+    tps = ""
+    if elapsed > 0 and out > 0:
+        tps = f" | {out / elapsed:.0f} t/s"
+    return f"{_k(inp)} in / {_k(out)} out{tps}"
 
 
 # ── Prompt helpers ───────────────────────────────────────────────────────────
@@ -678,14 +681,8 @@ async def _stream_openai_to_anthropic(oai_response: httpx.Response, model: str):
 
         if chunk.get("usage"):
             u = chunk["usage"]
-            new_in = u.get("prompt_tokens", 0)
-            new_out = u.get("completion_tokens", 0)
-            if new_in or new_out:
-                with _token_lock:
-                    _token_usage["input"] += new_in
-                    _token_usage["output"] += new_out
-            usage["input_tokens"] = new_in or usage["input_tokens"]
-            usage["output_tokens"] = new_out or usage["output_tokens"]
+            usage["input_tokens"] = u.get("prompt_tokens", usage["input_tokens"])
+            usage["output_tokens"] = u.get("completion_tokens", usage["output_tokens"])
 
         choices = chunk.get("choices", [])
         if not choices:
@@ -750,6 +747,10 @@ async def _stream_openai_to_anthropic(oai_response: httpx.Response, model: str):
                         "index": tool_calls_accum[tc_idx]["block_idx"],
                         "delta": {"type": "input_json_delta", "partial_json": args_chunk},
                     })
+
+    with _token_lock:
+        _token_usage["input"] += usage["input_tokens"]
+        _token_usage["output"] += usage["output_tokens"]
 
     if in_text_block:
         yield _sse_event("content_block_stop", {
@@ -1208,10 +1209,10 @@ def run_step(prompt: str, step_number: int, goal_step: int = 0) -> bool:
     _reset_tokens()
 
     def _on_activity(status: str):
-        elapsed = fmt_duration(time.monotonic() - t0)
+        elapsed_s = time.monotonic() - t0
         inp, out = _get_tokens()
-        tok = f" | {fmt_tokens(inp, out)}" if (inp or out) else ""
-        _edit_step_msg(f"{step_label} ({elapsed}{tok})\n{status}")
+        tok = f" | {fmt_tokens(inp, out, elapsed_s)}" if (inp or out) else ""
+        _edit_step_msg(f"{step_label} ({fmt_duration(elapsed_s)}{tok})\n{status}")
 
     success = False
     try:
@@ -1258,8 +1259,9 @@ def run_step(prompt: str, step_number: int, goal_step: int = 0) -> bool:
                 except (json.JSONDecodeError, KeyError):
                     pass
 
+            elapsed_s = time.monotonic() - t0
             inp, out = _get_tokens()
-            tok = f" | {fmt_tokens(inp, out)}" if (inp or out) else ""
+            tok = f" | {fmt_tokens(inp, out, elapsed_s)}" if (inp or out) else ""
             parts = [f"{step_label} ({elapsed}, {status}{tok})"]
             if agent_text:
                 parts.append(agent_text)
