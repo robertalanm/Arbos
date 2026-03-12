@@ -21,7 +21,7 @@
 ## Requirements
 
 - [Telegram Bot token](https://core.telegram.org/bots#how-do-i-create-a-bot)
-- [OpenRouter API key](https://openrouter.ai/settings/keys)
+- [Chutes API key](https://chutes.ai)
 
 ## Getting started
 
@@ -29,23 +29,40 @@
 curl -fsSL https://raw.githubusercontent.com/unconst/Arbos/main/run.sh | bash
 ```
 
-## Example
+## Usage
 
+Arbos runs a loop which passes `GOAL.md` to a coding agent. 
+To run Arbos just tell the agent what you want `GOAL.md` to be.
+
+Example prompt:
 ```
-Make this my new goal:
+R = you = an autonomous research agent with capital, data, and compute
 
-Here are my credentials:
-- Hyperliquid account key
-- Coinglass API key
-- LIUM compute API key
+Goal: design and evolve a system S that discovers profitable strategies in changing environments.
 
-I would like you to use Timefm (Time Series Foundation Models) as the basis for your machine learning models. Please train these models online using real-time data from Coinglass, and backtest them on historical data. Leverage all available compute to run as many concurrent model architectures as possible.
+Initial State:
+C = { $10k Hyperliquid capital, Coinglass derivatives data (funding, OI, liquidations, leverage), compute on Basilica/Targon/Lium }
+S₀ = continuous adaptive trading system with:
+    M ≈ 50 models per asset
+    online training on fresh data
+    evolutionary model search (mutate/replace weak models)
+    strict walk-forward validation + online Sharpe filtering
+    horizon ensembles H = {1h,4h,8h,12h,24h}
+    consensus gating for signals
+    layered risk controls (position limits, vol sizing, stops, drawdown protection)
+    features from derivatives positioning signals + price
+    exploration of modern time-series foundation models
 
-Please ensemble the top-performing models, as determined by backtesting on real-time data, and use this ensemble to trade my Hyperliquid account.
+Your loop consists of the following:
+loop t = 1..∞
+    S_t = design_or_modify(S_{t-1})
+    O_t = run(S_t)         # train models, evaluate, ensemble, trade
+    P_t = measure(O_t)     # Sharpe, PnL, drawdown, regime behavior
+    Δ_t = reflect(P_t)     # find weaknesses in models, signals, validation, risk
+    S_{t+1} = improve(S_t, Δ_t)
+end
 
-Before beginning, research the current state of the art in crypto trading using reinforcement learning (RL) and machine learning (ML). Use your findings to improve the overall system design. Next, decompose this objective into actionable goals and implement the system accordingly.
-
-After implementation, continuously monitor and proactively improve the system design and code. Regularly research, critique, and update your approach to ensure it remains truly state-of-the-art.
+Dont stop. Be proactive.
 ```
 
 ---

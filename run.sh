@@ -245,9 +245,9 @@ ask_key() {
     ok "$key_name saved"
 }
 
-ask_key "OPENROUTER_API_KEY" \
-    "OpenRouter API key" \
-    "Get yours at: https://openrouter.ai/keys" \
+ask_key "CHUTES_API_KEY" \
+    "Chutes API key" \
+    "Get yours at: https://chutes.ai — sign up and generate an API key" \
     "required"
 
 printf "\n"

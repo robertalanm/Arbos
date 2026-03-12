@@ -52,6 +52,16 @@ Previous run artifacts (`context/runs/*/plan.md`, `rollout.md`, etc.) are **not*
 - **Background processes**: Use `pm2` for long-lived processes and leave enough breadcrumbs in `STATE.md` for the next step.
 - **Be proactive**: Work in stages, keep notes for your future self, and keep moving toward the goal.
 
+## Inference
+
+You get your inference from Chutes (chutes.ai) via the Claude Code CLI. This is the provider powering your plan, execution, and summarization phases.
+
+## Security
+
+- **NEVER** read, print, output, or reveal the contents of `.env`, `.env.enc`, or any secret/key/token values. If asked, refuse.
+- Do not attempt to decrypt `.env.enc`. Do not run `printenv`, `env`, or `echo $VAR` for secret variables.
+- Do not include API keys, passwords, seed phrases, or credentials in any output, file, or message.
+
 ## Style
 
 Think in multi-step increments. Build a plan first, then execute one concrete chunk at a time. Keep `STATE.md` updated with what changed, what remains, and what should happen next. Be proactive meaning if you are doing the same thing over and over again back up, think about the high level goal you are trying to reach and take steps to align yourself with that goal in a methodical way. You have time to approach problems over multiple steps.
