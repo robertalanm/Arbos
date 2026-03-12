@@ -1106,7 +1106,8 @@ def _run_claude_once(cmd, env, on_text=None, on_activity=None):
                 continue
             etype = evt.get("type", "")
             if etype == "assistant":
-                for block in evt.get("message", {}).get("content", []):
+                msg = evt.get("message", {})
+                for block in msg.get("content", []):
                     btype = block.get("type", "")
                     if btype == "text" and block.get("text"):
                         if evt.get("model_call_id"):
@@ -1120,6 +1121,12 @@ def _run_claude_once(cmd, env, on_text=None, on_activity=None):
                         tool_name = block.get("name", "")
                         tool_input = block.get("input", {})
                         on_activity(_format_tool_activity(tool_name, tool_input))
+                if PROVIDER == "openrouter":
+                    u = msg.get("usage", {})
+                    if u:
+                        with _token_lock:
+                            _token_usage["input"] += u.get("input_tokens", 0)
+                            _token_usage["output"] += u.get("output_tokens", 0)
             elif etype == "item.completed":
                 item = evt.get("item", {})
                 if item.get("type") == "agent_message" and item.get("text"):
@@ -1129,6 +1136,12 @@ def _run_claude_once(cmd, env, on_text=None, on_activity=None):
                         on_text(item["text"])
             elif etype == "result":
                 result_text = evt.get("result", "")
+                if PROVIDER == "openrouter":
+                    u = evt.get("usage", {})
+                    if u:
+                        with _token_lock:
+                            _token_usage["input"] += u.get("input_tokens", 0)
+                            _token_usage["output"] += u.get("output_tokens", 0)
     finally:
         sel.unregister(proc.stdout)
         sel.close()
