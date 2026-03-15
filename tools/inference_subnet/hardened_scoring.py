@@ -992,6 +992,15 @@ class HardenedScoringEngine:
                 if weight != 0.0:
                     log.warning(f"Miner {uid}: non-finite or subnormal weight {weight} → 0.0")
                 weight = 0.0
+            # DEBUG: trace weight factors for epoch analysis
+            log.info(
+                f"[WEIGHT_TRACE] Miner {uid}: net_pts={stats.net_points:.3f} "
+                f"consistency={stats.consistency_score:.3f} "
+                f"cosine_avg={stats.avg_cosine:.3f} "
+                f"passed={stats.passed_challenges} failed={stats.failed_challenges} "
+                f"pr={stats.pass_rate:.3f} "
+                f"raw_weight={weight:.6f}"
+            )
             raw_weights[uid] = weight
 
         # Availability bonus: second pass using fleet-relative request counts.
@@ -1146,6 +1155,7 @@ class HardenedScoringEngine:
                 "is_suspect": stats.is_suspect,
                 "avg_ttft_ms": stats.avg_ttft_ms,
                 "avg_tps": stats.avg_tps,
+                "avg_cosine": stats.avg_cosine,
                 "computed_weight": live_weights.get(uid, 0.0),
             })
         return sorted(board, key=lambda x: x["computed_weight"], reverse=True)
