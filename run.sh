@@ -365,18 +365,14 @@ OVCLI
 OVCLI
                 ok "Wrote ~/.openviking/ovcli.conf"
 
-                # Build ov.conf — need embedding + VLM config
+                # Build ov.conf — reuse the same LLM provider for VLM/embeddings
                 printf "\n  ${DIM}Local OpenViking needs an embedding model and VLM.${NC}\n"
-                printf "  ${DIM}An OpenAI-compatible API key is recommended.${NC}\n\n"
+                printf "  ${DIM}Reusing your $PROVIDER credentials for this.${NC}\n\n"
 
-                ask_key "OPENVIKING_VLM_API_KEY" \
-                    "OpenAI API key for OpenViking VLM/embeddings" \
-                    "Used for semantic indexing. Get one at https://platform.openai.com" \
-                    "required"
+                if [ "$PROVIDER" = "openrouter" ]; then
+                    _vlm_key=$(grep "^OPENROUTER_API_KEY=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d "' \"")
 
-                _vlm_key=$(grep "^OPENVIKING_VLM_API_KEY=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d "' \"")
-
-                cat > "$HOME/.openviking/ov.conf" <<OVCONF
+                    cat > "$HOME/.openviking/ov.conf" <<OVCONF
 {
   "storage": {
     "workspace": "$HOME/openviking_workspace"
@@ -387,7 +383,38 @@ OVCLI
   },
   "embedding": {
     "dense": {
-      "api_base": "https://api.openai.com/v1",
+      "api_base": "https://openrouter.ai/api/v1",
+      "api_key": "$_vlm_key",
+      "provider": "litellm",
+      "dimension": 3072,
+      "model": "google/gemini-embedding-001"
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "api_base": "https://openrouter.ai/api/v1",
+    "api_key": "$_vlm_key",
+    "provider": "litellm",
+    "model": "qwen/qwen3.5-122b-a10b",
+    "max_concurrent": 100
+  }
+}
+OVCONF
+                else
+                    _vlm_key=$(grep "^CHUTES_API_KEY=" "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 | tr -d "' \"")
+
+                    cat > "$HOME/.openviking/ov.conf" <<OVCONF
+{
+  "storage": {
+    "workspace": "$HOME/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"
+  },
+  "embedding": {
+    "dense": {
+      "api_base": "https://llm.chutes.ai/v1",
       "api_key": "$_vlm_key",
       "provider": "openai",
       "dimension": 3072,
@@ -396,19 +423,20 @@ OVCLI
     "max_concurrent": 10
   },
   "vlm": {
-    "api_base": "https://api.openai.com/v1",
+    "api_base": "https://llm.chutes.ai/v1",
     "api_key": "$_vlm_key",
-    "provider": "openai",
-    "model": "gpt-4o-mini",
+    "provider": "litellm",
+    "model": "hosted_vllm/google/gemma-3-27b-it",
     "max_concurrent": 100
   }
 }
 OVCONF
-                ok "Wrote ~/.openviking/ov.conf"
+                fi
+                ok "Wrote ~/.openviking/ov.conf (provider=$PROVIDER)"
 
                 mkdir -p "$HOME/openviking_workspace"
 
-                # Start openviking-server via pm2
+                # Prepare openviking-server launch script (pm2 start deferred to step 8)
                 OV_LAUNCH="$HOME/.openviking/ov-launch.sh"
                 cat > "$OV_LAUNCH" <<OVLAUNCH
 #!/usr/bin/env bash
@@ -420,20 +448,7 @@ source .venv/bin/activate
 exec openviking-server 2>&1
 OVLAUNCH
                 chmod +x "$OV_LAUNCH"
-
-                pm2 delete "openviking" 2>/dev/null || true
-                pm2 start "$OV_LAUNCH" \
-                    --name "openviking" \
-                    --log "$INSTALL_DIR/logs/openviking.log" \
-                    --time \
-                    --restart-delay 5000
-
-                sleep 3
-                if pm2 pid "openviking" >/dev/null 2>&1 && [ -n "$(pm2 pid "openviking")" ]; then
-                    ok "OpenViking server running on localhost:1933"
-                else
-                    err "OpenViking server may not have started — check: pm2 logs openviking"
-                fi
+                OV_START_LOCAL=true
             fi
             ;;
         *)
@@ -487,6 +502,24 @@ if ! command_exists pm2; then
     fi
     run "Installing pm2" npm install -g pm2
     command_exists pm2 || die "pm2 install failed"
+fi
+
+# Start local OpenViking server if flagged during setup
+if [ "${OV_START_LOCAL:-}" = "true" ]; then
+    OV_LAUNCH="$HOME/.openviking/ov-launch.sh"
+    pm2 delete "openviking" 2>/dev/null || true
+    pm2 start "$OV_LAUNCH" \
+        --name "openviking" \
+        --log "$INSTALL_DIR/logs/openviking.log" \
+        --time \
+        --restart-delay 5000
+
+    sleep 3
+    if pm2 pid "openviking" >/dev/null 2>&1 && [ -n "$(pm2 pid "openviking")" ]; then
+        ok "OpenViking server running on localhost:1933"
+    else
+        err "OpenViking server may not have started — check: pm2 logs openviking"
+    fi
 fi
 
 # Stop existing instance if running
