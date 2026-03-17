@@ -385,7 +385,7 @@ OVCLI
     "dense": {
       "api_base": "https://openrouter.ai/api/v1",
       "api_key": "$_vlm_key",
-      "provider": "litellm",
+      "provider": "openai",
       "dimension": 3072,
       "model": "google/gemini-embedding-001"
     },
